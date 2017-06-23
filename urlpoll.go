@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bufio"
+	"flag"
 	"log"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -13,11 +16,7 @@ const (
 	errTimeout     = 10 * time.Second // back-off timeout on error
 )
 
-var urls = []string{
-	"http://www.google.com/",
-	"http://golang.org/",
-	"http://blog.golang.org/",
-}
+var urlsFilepath = flag.String("urlsFilepath", "", "filepath to .txt file containing urls to poll (each on new line)")
 
 // State represents the last-known state of a URL.
 type State struct {
@@ -89,7 +88,31 @@ func Poller(in <-chan *Resource, out chan<- *Resource, status chan<- State) {
 	}
 }
 
+// Sender reads urls from provided filepath and sends them as Resources
+// to the queue receiving poll requests
+func Sender(urlsFilepath string, todo chan<- *Resource) {
+	urlsFile, err := os.Open(urlsFilepath)
+	if err != nil {
+		log.Fatalln("failed to read urls from file", urlsFilepath, err)
+		return
+	}
+	defer urlsFile.Close()
+
+	for scanner := bufio.NewScanner(urlsFile); scanner.Scan(); {
+		todo <- &Resource{url: scanner.Text()}
+	}
+}
+
 func main() {
+	// Parse command-line flags
+	flag.Parse()
+
+	// Validate urls filepath
+	if *urlsFilepath == "" {
+		log.Fatalln("failed to provide valid urls filepath")
+		return
+	}
+
 	// Create our input and output channels
 	pending, complete := make(chan *Resource), make(chan *Resource)
 
@@ -102,13 +125,9 @@ func main() {
 	}
 
 	// Send some Resources to the pending queue
-	// TODO: move this to its own named function and read urls from a file
-	go func() {
-		for _, url := range urls {
-			pending <- &Resource{url: url}
-		}
-	}()
+	go Sender(*urlsFilepath, pending)
 
+	// Re-deliver polled Resources back to pending queue after sleep duration
 	for r := range complete {
 		go r.Sleep(pending)
 	}
